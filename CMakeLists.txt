@@ -10,9 +10,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
-add_subdirectory(extern/eliott-math)
-add_subdirectory(extern/eliott-ecs)
-
 
 
 add_library(eliott-physics STATIC
