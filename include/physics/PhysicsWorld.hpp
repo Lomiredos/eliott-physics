@@ -39,9 +39,6 @@ namespace ee::physics
     private:
 
     void repulse(ee::ecs::EntityID _firstID, ee::ecs::EntityID _secondID);
-
-
-
     };
 
 }

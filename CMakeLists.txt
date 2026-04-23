@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(eliott-physics VERSION 1.0.0 LANGUAGES CXX)
 
+if(TARGET eliott-physics)
+    return()
+endif()
+
+set(CMAKE_TOOLCHAIN_FILE "C:/Dev/vcpkg/scripts/buildsystems/vcpkg.cmake")
+set(CMAKE_PREFIX_PATH "C:/Dev/vcpkg/installed/x64-mingw-static")
+
 
 set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 
