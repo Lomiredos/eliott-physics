@@ -9,6 +9,7 @@ namespace ee::physics
         ee::math::Vector2<float> forces;
         float mass = 1.0f;
         bool isStatic = false;
+        bool isGrounded = false;
     };
 
 }

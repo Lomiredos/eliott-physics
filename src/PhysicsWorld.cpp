@@ -5,6 +5,26 @@ using namespace ee::physics;
 using namespace ee::math;
 using namespace ee::ecs;
 
+namespace
+{
+    // Annule la composante de vitesse qui rentre dans la collision (le long de
+    // la normale de separation) et marque isGrounded si on est pousse vers le haut.
+    void killInwardVelocity(RigidBody &_body, Vector2<float> _pushDir)
+    {
+        float len = _pushDir.Magnetude();
+        if (len <= 0.0f)
+            return;
+
+        Vector2<float> normal = _pushDir / len;
+        float vn = _body.velocity.Dot(normal);
+        if (vn < 0.0f)
+            _body.velocity -= normal * vn;
+
+        if (normal.y < -0.5f)
+            _body.isGrounded = true;
+    }
+}
+
 void ee::physics::PhysicsWorld::update(float _dt)
 {
     m_bounds.clear();
@@ -14,6 +34,8 @@ void ee::physics::PhysicsWorld::update(float _dt)
         RigidBody &comp = *m_world.getComponent<RigidBody>(entity);
         Collider &collidComp = *m_world.getComponent<Collider>(entity);
         Transform &transfromComp = *m_world.getComponent<Transform>(entity);
+
+        comp.isGrounded = false;
 
         if (comp.isStatic == false)
         {
@@ -117,8 +139,10 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
     Collider &firstColliderComp = *m_world.getComponent<Collider>(_firstID);
     Collider &secondColliderComp = *m_world.getComponent<Collider>(_secondID);
 
-    bool firstIsStatic = m_world.getComponent<RigidBody>(_firstID)->isStatic;
-    bool secondIsStatic = m_world.getComponent<RigidBody>(_secondID)->isStatic;
+    RigidBody &firstBody = *m_world.getComponent<RigidBody>(_firstID);
+    RigidBody &secondBody = *m_world.getComponent<RigidBody>(_secondID);
+    bool firstIsStatic = firstBody.isStatic;
+    bool secondIsStatic = secondBody.isStatic;
 
     float firstMove = 0.f;
     float secondMove = 0.f;
@@ -151,6 +175,10 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
         firstTransfromComp.position -= deplacement * firstMove;
         secondTransfromComp.position += deplacement * secondMove;
 
+        if (!firstIsStatic)
+            killInwardVelocity(firstBody, deplacement * -1.0f);
+        if (!secondIsStatic)
+            killInwardVelocity(secondBody, deplacement);
     }
     else if (m_bounds[_firstID].second == false && m_bounds[_secondID].second == false)
     {
@@ -169,6 +197,11 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
 
         firstTransfromComp.position -= direction * (overlap * firstMove);
         secondTransfromComp.position += direction * (overlap * secondMove);
+
+        if (!firstIsStatic)
+            killInwardVelocity(firstBody, direction * -1.0f);
+        if (!secondIsStatic)
+            killInwardVelocity(secondBody, direction);
     }
     else
     {
@@ -202,6 +235,12 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
 
         circleTransfromComp.position += direction * overlap * circleMove;
         aabbTrasnfromComp.position -= direction * overlap * aabbMove;
-    
+
+        RigidBody &circleBody = m_bounds[_firstID].second ? secondBody : firstBody;
+        RigidBody &aabbBody = m_bounds[_firstID].second ? firstBody : secondBody;
+        if (!circleBody.isStatic)
+            killInwardVelocity(circleBody, direction);
+        if (!aabbBody.isStatic)
+            killInwardVelocity(aabbBody, direction * -1.0f);
     }
 }
