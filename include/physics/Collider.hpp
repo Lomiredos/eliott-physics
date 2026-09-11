@@ -1,6 +1,7 @@
 #pragma once
 
 #include <variant>
+#include "math/Vector2.hpp"
 
 namespace ee::physics {
 
@@ -18,6 +19,7 @@ namespace ee::physics {
 struct Collider{
 
     std::variant<Circle, AABB> shape;
+    ee::math::Vector2<float> offset = {0.f, 0.f};
 
 
 };

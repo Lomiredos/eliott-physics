@@ -11,9 +11,9 @@ void ee::physics::PhysicsWorld::update(float _dt)
     m_quadTree.clear();
     for (ee::ecs::EntityID entity : m_system->m_entities)
     {
-        RigidBody &comp = m_world.getComponent<RigidBody>(entity);
-        Collider &collidComp = m_world.getComponent<Collider>(entity);
-        Transform &transfromComp = m_world.getComponent<Transform>(entity);
+        RigidBody &comp = *m_world.getComponent<RigidBody>(entity);
+        Collider &collidComp = *m_world.getComponent<Collider>(entity);
+        Transform &transfromComp = *m_world.getComponent<Transform>(entity);
 
         if (comp.isStatic == false)
         {
@@ -21,18 +21,19 @@ void ee::physics::PhysicsWorld::update(float _dt)
             transfromComp.position += comp.velocity * _dt;
         }
 
+        Vector2<float> center = transfromComp.position + collidComp.offset;
         Rect<float> bounds;
         bool isAABB;
         if (std::holds_alternative<AABB>(collidComp.shape))
         {
             AABB &s = std::get<AABB>(collidComp.shape);
-            bounds = Rect<float>(transfromComp.position, {s.width, s.height});
+            bounds = Rect<float>(center, {s.width, s.height});
             isAABB = true;
         }
         else
         {
             Circle &s = std::get<Circle>(collidComp.shape);
-            bounds = Rect<float>(transfromComp.position - Vector2<float>(s.radius, s.radius),
+            bounds = Rect<float>(center - Vector2<float>(s.radius, s.radius),
                                  Vector2<float>(s.radius * 2, s.radius * 2));
             isAABB = false;
         }
@@ -42,8 +43,8 @@ void ee::physics::PhysicsWorld::update(float _dt)
 
     for (EntityID entity : m_system->m_entities)
     {
-        Collider &colliderComp = m_world.getComponent<Collider>(entity);
-        Transform &transfromComp = m_world.getComponent<Transform>(entity);
+        Collider &colliderComp = *m_world.getComponent<Collider>(entity);
+        Transform &transfromComp = *m_world.getComponent<Transform>(entity);
 
         std::vector<Entry> result = m_quadTree.query(m_bounds[entity].first);
         if (std::holds_alternative<AABB>(colliderComp.shape))
@@ -58,8 +59,8 @@ void ee::physics::PhysicsWorld::update(float _dt)
                 }
                 else
                 {
-                    Collider otherColliderComp = m_world.getComponent<Collider>(entry.id);
-                    Transform otherTransfromComp = m_world.getComponent<Transform>(entry.id);
+                    Collider otherColliderComp = *m_world.getComponent<Collider>(entry.id);
+                    Transform otherTransfromComp = *m_world.getComponent<Transform>(entry.id);
                     Vector2<float> closest;
 
                     closest.x = std::clamp(otherTransfromComp.position.x, m_bounds[entity].first.getPosition(0).x, m_bounds[entity].first.getPosition(1).x);
@@ -81,8 +82,8 @@ void ee::physics::PhysicsWorld::update(float _dt)
                 if (m_bounds[entry.id].second)
                 {
 
-                    Collider otherColliderComp = m_world.getComponent<Collider>(entry.id);
-                    Transform otherTransfromComp = m_world.getComponent<Transform>(entry.id);
+                    Collider otherColliderComp = *m_world.getComponent<Collider>(entry.id);
+                    Transform otherTransfromComp = *m_world.getComponent<Transform>(entry.id);
                     Vector2<float> closest;
 
                     closest.x = std::clamp(m_bounds[entity].first.getPosition().x, otherTransfromComp.position.x, otherTransfromComp.position.x + std::get<AABB>(otherColliderComp.shape).width);
@@ -95,8 +96,8 @@ void ee::physics::PhysicsWorld::update(float _dt)
                 }
                 else
                 {
-                    Collider otherColliderComp = m_world.getComponent<Collider>(entry.id);
-                    Transform otherTransfromComp = m_world.getComponent<Transform>(entry.id);
+                    Collider otherColliderComp = *m_world.getComponent<Collider>(entry.id);
+                    Transform otherTransfromComp = *m_world.getComponent<Transform>(entry.id);
                     if (transfromComp.position.Distance(otherTransfromComp.position) <= std::get<Circle>(otherColliderComp.shape).radius + std::get<Circle>(colliderComp.shape).radius)
                     {
 
@@ -110,14 +111,14 @@ void ee::physics::PhysicsWorld::update(float _dt)
 
 void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::EntityID _secondID)
 {
-    Transform &firstTransfromComp = m_world.getComponent<Transform>(_firstID);
-    Transform &secondTransfromComp = m_world.getComponent<Transform>(_secondID);
+    Transform &firstTransfromComp = *m_world.getComponent<Transform>(_firstID);
+    Transform &secondTransfromComp = *m_world.getComponent<Transform>(_secondID);
 
-    Collider &firstColliderComp = m_world.getComponent<Collider>(_firstID);
-    Collider &secondColliderComp = m_world.getComponent<Collider>(_secondID);
+    Collider &firstColliderComp = *m_world.getComponent<Collider>(_firstID);
+    Collider &secondColliderComp = *m_world.getComponent<Collider>(_secondID);
 
-    bool firstIsStatic = m_world.getComponent<RigidBody>(_firstID).isStatic;
-    bool secondIsStatic = m_world.getComponent<RigidBody>(_secondID).isStatic;
+    bool firstIsStatic = m_world.getComponent<RigidBody>(_firstID)->isStatic;
+    bool secondIsStatic = m_world.getComponent<RigidBody>(_secondID)->isStatic;
 
     float firstMove = 0.f;
     float secondMove = 0.f;
@@ -154,8 +155,8 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
     else if (m_bounds[_firstID].second == false && m_bounds[_secondID].second == false)
     {
 
-        Vector2<float> firstPos = firstTransfromComp.position;
-        Vector2<float> secondPos = secondTransfromComp.position;
+        Vector2<float> firstPos = firstTransfromComp.position + firstColliderComp.offset;
+        Vector2<float> secondPos = secondTransfromComp.position + secondColliderComp.offset;
 
         float firstRadius = std::get<Circle>(firstColliderComp.shape).radius;
         float secondRadius = std::get<Circle>(secondColliderComp.shape).radius;
@@ -182,13 +183,13 @@ void ee::physics::PhysicsWorld::repulse(ee::ecs::EntityID _firstID, ee::ecs::Ent
         float aabbMove = (aabbID == _firstID) ? firstMove : secondMove;
         float circleMove = (circleID == _firstID) ? firstMove : secondMove;
 
-        Vector2<float> circlePos = circleTransfromComp.position;
+        Vector2<float> circlePos = circleTransfromComp.position + circleColliderComp.offset;
         float circleRadius = std::get<Circle>(circleColliderComp.shape).radius;
 
         AABB rectAABB =std::get<AABB>(aabbColliderComp.shape);
 
         Vector2<float> aabbDim = Vector2<float>(rectAABB.width, rectAABB.height);
-        Rect<float> aabbRect = Rect<float>(aabbTrasnfromComp.position, aabbDim);
+        Rect<float> aabbRect = Rect<float>(aabbTrasnfromComp.position + aabbColliderComp.offset, aabbDim);
 
         Vector2<float> closest;
 
