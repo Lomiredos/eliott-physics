@@ -1,52 +1,55 @@
 #pragma once
 
-#include <vector>
-#include <utility>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "ecs/System.hpp"
 #include "ecs/World.hpp"
-#include "math/Vector2.hpp"
 #include "math/Rect.hpp"
 #include "math/Transform.hpp"
-#include "physics/QuadTree.hpp"
+#include "math/Vector2.hpp"
 #include "physics/Collider.hpp"
-#include "physics/RigidBody.hpp"
+#include "physics/QuadTree.hpp"
+namespace ee::physics {
+using CollisionPair = std::pair<ee::ecs::EntityID, ee::ecs::EntityID>;
 
-namespace ee::physics
-{
-    using CollisionPair = std::pair<ee::ecs::EntityID, ee::ecs::EntityID>;
+struct SatShape {
+  std::vector<ee::math::Vector2<float>> vertices;
+  ee::math::Vector2<float> center;
+  float radius = 0.0f;
+};
 
-    // Forme prete pour SAT : soit un polygone convexe (sommets en repere monde),
-    // soit un cercle (vertices vide + radius > 0). Les box/OBB sont des polygones
-    // a 4 sommets generes depuis l'AABB + la rotation du Transform.
-    struct SatShape
-    {
-        std::vector<ee::math::Vector2<float>> vertices;
-        ee::math::Vector2<float> center;
-        float radius = 0.0f;
-    };
+// Construit la forme SAT (sommets en repere monde, box tournee par la
+// rotation) d'un collider. Utilisee par PhysicsSystem, et reutilisable
+// telle quelle par un rendu debug (meme geometrie que la physique).
+SatShape makeShape(const Collider &_col, const ee::math::Transform &_tr);
 
-    class PhysicsSystem : public ee::ecs::UpdateSystem
-    {
-    private:
-        QuadTree m_quadTree;
-        ee::math::Vector2<float> m_gravity = ee::math::Vector2<float>(0.0f, 981.0f);
-        std::unordered_map<ee::ecs::EntityID, ee::math::Rect<float>> m_bounds; // AABB englobante (broad-phase)
-        std::unordered_map<ee::ecs::EntityID, SatShape> m_shapes;              // forme SAT de la frame
-        std::vector<CollisionPair> m_collisions;
+class PhysicsSystem : public ee::ecs::UpdateSystem {
+private:
+  QuadTree m_quadTree;
+  ee::math::Vector2<float> m_gravity = ee::math::Vector2<float>(0.0f, 981.0f);
+  std::unordered_map<ee::ecs::EntityID, ee::math::Rect<float>> m_bounds;
+  std::unordered_map<ee::ecs::EntityID, SatShape> m_shapes;
+  std::vector<CollisionPair> m_collisions;
 
-    public:
-        PhysicsSystem() : m_quadTree(ee::math::Rect<float>(0.0f, 0.0f, 0.0f, 0.0f), 0) {}
+public:
+  PhysicsSystem()
+      : m_quadTree(ee::math::Rect<float>(0.0f, 0.0f, 0.0f, 0.0f), 0) {}
 
-        void configure(ee::math::Rect<float> _worldBounds) { m_quadTree = QuadTree(_worldBounds, 0); }
-        void setGravity(ee::math::Vector2<float> _gravity) { m_gravity = _gravity; }
+  void configure(ee::math::Rect<float> _worldBounds) {
+    m_quadTree = QuadTree(_worldBounds, 0);
+  }
+  void setGravity(ee::math::Vector2<float> _gravity) { m_gravity = _gravity; }
 
-        void update(ee::ecs::World &_world, float _dt) override;
+  void update(ee::ecs::World &_world, float _dt) override;
 
-        const std::vector<CollisionPair> &getCollisions() const { return m_collisions; }
+  const std::vector<CollisionPair> &getCollisions() const {
+    return m_collisions;
+  }
 
-    private:
-        void resolve(ee::ecs::World &_world, ee::ecs::EntityID _a, ee::ecs::EntityID _b);
-    };
-}
+private:
+  void resolve(ee::ecs::World &_world, ee::ecs::EntityID _a,
+               ee::ecs::EntityID _b);
+};
+} // namespace ee::physics
