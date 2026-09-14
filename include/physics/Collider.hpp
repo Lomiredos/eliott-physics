@@ -20,6 +20,7 @@ struct Collider{
 
     std::variant<Circle, AABB> shape;
     ee::math::Vector2<float> offset = {0.f, 0.f};
+    bool isSensor = false;   // true = detecte sans repousser (trigger)
 
 
 };

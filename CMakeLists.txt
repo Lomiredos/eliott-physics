@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(eliott-physics STATIC
     src/QuadTree.cpp
-    src/PhysicsWorld.cpp
+    src/PhysicsSystem.cpp
 )
 
 target_include_directories(eliott-physics PUBLIC
