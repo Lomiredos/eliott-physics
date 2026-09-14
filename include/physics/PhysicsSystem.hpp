@@ -17,12 +17,23 @@ namespace ee::physics
 {
     using CollisionPair = std::pair<ee::ecs::EntityID, ee::ecs::EntityID>;
 
+    // Forme prete pour SAT : soit un polygone convexe (sommets en repere monde),
+    // soit un cercle (vertices vide + radius > 0). Les box/OBB sont des polygones
+    // a 4 sommets generes depuis l'AABB + la rotation du Transform.
+    struct SatShape
+    {
+        std::vector<ee::math::Vector2<float>> vertices;
+        ee::math::Vector2<float> center;
+        float radius = 0.0f;
+    };
+
     class PhysicsSystem : public ee::ecs::UpdateSystem
     {
     private:
         QuadTree m_quadTree;
         ee::math::Vector2<float> m_gravity = ee::math::Vector2<float>(0.0f, 981.0f);
-        std::unordered_map<ee::ecs::EntityID, std::pair<ee::math::Rect<float>, bool>> m_bounds;
+        std::unordered_map<ee::ecs::EntityID, ee::math::Rect<float>> m_bounds; // AABB englobante (broad-phase)
+        std::unordered_map<ee::ecs::EntityID, SatShape> m_shapes;              // forme SAT de la frame
         std::vector<CollisionPair> m_collisions;
 
     public:
@@ -36,6 +47,6 @@ namespace ee::physics
         const std::vector<CollisionPair> &getCollisions() const { return m_collisions; }
 
     private:
-        void repulse(ee::ecs::World &_world, ee::ecs::EntityID _firstID, ee::ecs::EntityID _secondID);
+        void resolve(ee::ecs::World &_world, ee::ecs::EntityID _a, ee::ecs::EntityID _b);
     };
 }

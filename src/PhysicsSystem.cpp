@@ -1,5 +1,9 @@
 #include "physics/PhysicsSystem.hpp"
+
 #include <algorithm>
+#include <optional>
+#include <cmath>
+#include <cfloat>
 
 using namespace ee::physics;
 using namespace ee::math;
@@ -7,18 +11,164 @@ using namespace ee::ecs;
 
 namespace
 {
-    // Annule la composante de vitesse qui rentre dans la collision + isGrounded.
+    bool isCircle(const SatShape &_s) { return _s.vertices.empty(); }
+
+    // Construit la forme SAT d'un collider (sommets en monde, box tournee par la rotation).
+    SatShape makeShape(const Collider &_col, const Transform &_tr)
+    {
+        SatShape s;
+        s.center = _tr.position + _col.offset;
+
+        if (std::holds_alternative<Circle>(_col.shape))
+        {
+            s.radius = std::get<Circle>(_col.shape).radius;
+            return s;
+        }
+
+        const AABB &box = std::get<AABB>(_col.shape);
+        float hw = box.width * 0.5f;
+        float hh = box.height * 0.5f;
+
+        float rad = _tr.rotation * 3.14159265f / 180.0f;
+        float c = std::cos(rad);
+        float sn = std::sin(rad);
+
+        Vector2<float> corners[4] = {{-hw, -hh}, {hw, -hh}, {hw, hh}, {-hw, hh}};
+        for (const Vector2<float> &p : corners)
+        {
+            Vector2<float> r(p.x * c - p.y * sn, p.x * sn + p.y * c);
+            s.vertices.push_back(s.center + r);
+        }
+        return s;
+    }
+
+    Rect<float> enclosingAABB(const SatShape &_s)
+    {
+        Vector2<float> mn;
+        Vector2<float> mx;
+        if (isCircle(_s))
+        {
+            mn = _s.center - Vector2<float>(_s.radius, _s.radius);
+            mx = _s.center + Vector2<float>(_s.radius, _s.radius);
+        }
+        else
+        {
+            mn = _s.vertices[0];
+            mx = _s.vertices[0];
+            for (const Vector2<float> &v : _s.vertices)
+            {
+                mn.x = std::min(mn.x, v.x);
+                mn.y = std::min(mn.y, v.y);
+                mx.x = std::max(mx.x, v.x);
+                mx.y = std::max(mx.y, v.y);
+            }
+        }
+        return Rect<float>(mn, mx - mn);
+    }
+
+    void projectShape(const SatShape &_s, const Vector2<float> &_axis, float &_min, float &_max)
+    {
+        if (isCircle(_s))
+        {
+            float c = _s.center.Dot(_axis);
+            _min = c - _s.radius;
+            _max = c + _s.radius;
+            return;
+        }
+        _min = _max = _s.vertices[0].Dot(_axis);
+        for (size_t i = 1; i < _s.vertices.size(); i++)
+        {
+            float d = _s.vertices[i].Dot(_axis);
+            _min = std::min(_min, d);
+            _max = std::max(_max, d);
+        }
+    }
+
+    // axe cercle -> sommet le plus proche du polygone
+    Vector2<float> circleAxis(const Vector2<float> &_center, const SatShape &_poly)
+    {
+        float best = FLT_MAX;
+        Vector2<float> bestV = _poly.vertices[0];
+        for (const Vector2<float> &v : _poly.vertices)
+        {
+            float d = (v - _center).Magnetude();
+            if (d < best)
+            {
+                best = d;
+                bestV = v;
+            }
+        }
+        Vector2<float> a = bestV - _center;
+        return a.Magnetude() > 0.0f ? a.Normalize() : Vector2<float>(1.0f, 0.0f);
+    }
+
+    // MTV pour separer A de B (oriente pour pousser A hors de B), nullopt si pas de collision.
+    std::optional<Vector2<float>> satMTV(const SatShape &_a, const SatShape &_b)
+    {
+        std::vector<Vector2<float>> axes;
+
+        auto addPolyAxes = [&](const SatShape &s)
+        {
+            for (size_t i = 0; i < s.vertices.size(); i++)
+            {
+                Vector2<float> e = s.vertices[(i + 1) % s.vertices.size()] - s.vertices[i];
+                axes.push_back(Vector2<float>(-e.y, e.x).Normalize());
+            }
+        };
+
+        if (!isCircle(_a))
+            addPolyAxes(_a);
+        if (!isCircle(_b))
+            addPolyAxes(_b);
+
+        if (isCircle(_a) && !isCircle(_b))
+            axes.push_back(circleAxis(_a.center, _b));
+        if (isCircle(_b) && !isCircle(_a))
+            axes.push_back(circleAxis(_b.center, _a));
+        if (isCircle(_a) && isCircle(_b))
+        {
+            Vector2<float> d = _b.center - _a.center;
+            if (d.Magnetude() <= 0.0f)
+                return std::nullopt;
+            axes.push_back(d.Normalize());
+        }
+
+        if (axes.empty())
+            return std::nullopt;
+
+        float minOverlap = FLT_MAX;
+        Vector2<float> mtvAxis;
+        for (const Vector2<float> &axis : axes)
+        {
+            float aMin, aMax, bMin, bMax;
+            projectShape(_a, axis, aMin, aMax);
+            projectShape(_b, axis, bMin, bMax);
+            float overlap = std::min(aMax, bMax) - std::max(aMin, bMin);
+            if (overlap <= 0.0f)
+                return std::nullopt; // axe separateur -> pas de collision
+            if (overlap < minOverlap)
+            {
+                minOverlap = overlap;
+                mtvAxis = axis;
+            }
+        }
+
+        // orienter le MTV pour pousser A hors de B
+        if ((_a.center - _b.center).Dot(mtvAxis) < 0.0f)
+            mtvAxis = mtvAxis * -1.0f;
+
+        return mtvAxis * minOverlap;
+    }
+
     void killInwardVelocity(RigidBody &_body, Vector2<float> _pushDir)
     {
         float len = _pushDir.Magnetude();
         if (len <= 0.0f)
             return;
-
         Vector2<float> normal = _pushDir / len;
         float vn = _body.velocity.Dot(normal);
         if (vn < 0.0f)
             _body.velocity -= normal * vn;
-
         if (normal.y < -0.5f)
             _body.isGrounded = true;
     }
@@ -27,10 +177,11 @@ namespace
 void ee::physics::PhysicsSystem::update(ee::ecs::World &_world, float _dt)
 {
     m_bounds.clear();
-    m_quadTree.clear();
+    m_shapes.clear();
     m_collisions.clear();
+    m_quadTree.clear();
 
-    // 1) Integration + calcul des bounds (position = CENTRE, coherent avec le sprite).
+    // 1) Integration + formes SAT + AABB englobantes (broad-phase).
     for (EntityID entity : m_entities)
     {
         RigidBody &body = *_world.getComponent<RigidBody>(entity);
@@ -45,142 +196,64 @@ void ee::physics::PhysicsSystem::update(ee::ecs::World &_world, float _dt)
             transform.position += body.velocity * _dt;
         }
 
-        Vector2<float> center = transform.position + collider.offset;
-        Rect<float> bounds;
-        bool isAABB;
-        if (std::holds_alternative<AABB>(collider.shape))
-        {
-            AABB &s = std::get<AABB>(collider.shape);
-            bounds.setSize(Vector2<float>(s.width, s.height));
-            isAABB = true;
-        }
-        else
-        {
-            Circle &s = std::get<Circle>(collider.shape);
-            bounds.setSize(Vector2<float>(s.radius * 2.0f, s.radius * 2.0f));
-            isAABB = false;
-        }
-        bounds.setPosition(center);
-        m_bounds[entity] = {bounds, isAABB};
-        m_quadTree.insert(entity, bounds);
+        SatShape shape = makeShape(collider, transform);
+        Rect<float> aabb = enclosingAABB(shape);
+        m_bounds[entity] = aabb;
+        m_shapes[entity] = shape;
+        m_quadTree.insert(entity, aabb);
     }
 
-    // 2) Detection (chaque paire une seule fois) puis resolution.
+    // 2) Broad-phase (quadtree) + narrow-phase (SAT) + resolution.
     for (EntityID entity : m_entities)
     {
-        std::vector<Entry> result = m_quadTree.query(m_bounds[entity].first);
-        for (Entry entry : result)
+        std::vector<Entry> result = m_quadTree.query(m_bounds[entity]);
+        for (const Entry &entry : result)
         {
             if (entry.id <= entity)
                 continue;
-
-            const Rect<float> &aB = m_bounds[entity].first;
-            const Rect<float> &bB = m_bounds[entry.id].first;
-            bool aIsAABB = m_bounds[entity].second;
-            bool bIsAABB = m_bounds[entry.id].second;
-
-            bool collide = false;
-            if (aIsAABB && bIsAABB)
-            {
-                collide = aB.Intersects(bB);
-            }
-            else if (!aIsAABB && !bIsAABB)
-            {
-                float ra = aB.getSize().x * 0.5f;
-                float rb = bB.getSize().x * 0.5f;
-                collide = aB.getPosition().Distance(bB.getPosition()) <= ra + rb;
-            }
-            else
-            {
-                const Rect<float> &box = aIsAABB ? aB : bB;
-                const Rect<float> &circ = aIsAABB ? bB : aB;
-                float r = circ.getSize().x * 0.5f;
-                Vector2<float> c = circ.getPosition();
-                Vector2<float> closest;
-                closest.x = std::clamp(c.x, box.getPosition(0).x, box.getPosition(1).x);
-                closest.y = std::clamp(c.y, box.getPosition(0, 0).y, box.getPosition(1, 1).y);
-                collide = closest.Distance(c) < r;
-            }
-
-            if (collide)
-                repulse(_world, entity, entry.id);
+            resolve(_world, entity, entry.id);
         }
     }
 }
 
-void ee::physics::PhysicsSystem::repulse(ee::ecs::World &_world, EntityID _firstID, EntityID _secondID)
+void ee::physics::PhysicsSystem::resolve(ee::ecs::World &_world, EntityID _a, EntityID _b)
 {
-    m_collisions.push_back({_firstID, _secondID});
-
-    Collider &firstCol = *_world.getComponent<Collider>(_firstID);
-    Collider &secondCol = *_world.getComponent<Collider>(_secondID);
-    if (firstCol.isSensor || secondCol.isSensor)
-        return; // trigger : detecte mais ne repousse pas
-
-    RigidBody &firstBody = *_world.getComponent<RigidBody>(_firstID);
-    RigidBody &secondBody = *_world.getComponent<RigidBody>(_secondID);
-    Transform &firstTr = *_world.getComponent<Transform>(_firstID);
-    Transform &secondTr = *_world.getComponent<Transform>(_secondID);
-
-    if (firstBody.isStatic && secondBody.isStatic)
+    std::optional<Vector2<float>> mtv = satMTV(m_shapes[_a], m_shapes[_b]);
+    if (!mtv)
         return;
 
-    float firstMove = 0.0f;
-    float secondMove = 0.0f;
-    if (!firstBody.isStatic && !secondBody.isStatic)
+    m_collisions.push_back({_a, _b});
+
+    Collider *ca = _world.getComponent<Collider>(_a);
+    Collider *cb = _world.getComponent<Collider>(_b);
+    if ((ca && ca->isSensor) || (cb && cb->isSensor))
+        return; // trigger : detecte, pas de resolution
+
+    RigidBody &ba = *_world.getComponent<RigidBody>(_a);
+    RigidBody &bb = *_world.getComponent<RigidBody>(_b);
+    if (ba.isStatic && bb.isStatic)
+        return;
+
+    float moveA = 0.0f;
+    float moveB = 0.0f;
+    if (!ba.isStatic && !bb.isStatic)
     {
-        firstMove = 0.5f;
-        secondMove = 0.5f;
+        moveA = 0.5f;
+        moveB = 0.5f;
     }
-    else if (!firstBody.isStatic)
-        firstMove = 1.0f;
+    else if (!ba.isStatic)
+        moveA = 1.0f;
     else
-        secondMove = 1.0f;
+        moveB = 1.0f;
 
-    const Rect<float> &aB = m_bounds[_firstID].first;
-    const Rect<float> &bB = m_bounds[_secondID].first;
-    bool aIsAABB = m_bounds[_firstID].second;
-    bool bIsAABB = m_bounds[_secondID].second;
+    Transform &ta = *_world.getComponent<Transform>(_a);
+    Transform &tb = *_world.getComponent<Transform>(_b);
 
-    Vector2<float> disp; // deplacement pour separer "first" de "second"
+    ta.position += *mtv * moveA;
+    tb.position -= *mtv * moveB;
 
-    if (aIsAABB && bIsAABB)
-    {
-        float overlapX = std::min(aB.getPosition(1).x, bB.getPosition(1).x) - std::max(aB.getPosition(0).x, bB.getPosition(0).x);
-        float overlapY = std::min(aB.getPosition(1, 1).y, bB.getPosition(1, 1).y) - std::max(aB.getPosition(0, 0).y, bB.getPosition(0, 0).y);
-
-        if (overlapX < overlapY)
-            disp = Vector2<float>(overlapX * (aB.getPosition().x < bB.getPosition().x ? -1.0f : 1.0f), 0.0f);
-        else
-            disp = Vector2<float>(0.0f, overlapY * (aB.getPosition().y < bB.getPosition().y ? -1.0f : 1.0f));
-    }
-    else if (!aIsAABB && !bIsAABB)
-    {
-        float ra = aB.getSize().x * 0.5f;
-        float rb = bB.getSize().x * 0.5f;
-        Vector2<float> dir = (aB.getPosition() - bB.getPosition()).Normalize();
-        float overlap = (ra + rb) - aB.getPosition().Distance(bB.getPosition());
-        disp = dir * overlap;
-    }
-    else
-    {
-        const Rect<float> &box = aIsAABB ? aB : bB;
-        const Rect<float> &circ = aIsAABB ? bB : aB;
-        float r = circ.getSize().x * 0.5f;
-        Vector2<float> c = circ.getPosition();
-        Vector2<float> closest;
-        closest.x = std::clamp(c.x, box.getPosition(0).x, box.getPosition(1).x);
-        closest.y = std::clamp(c.y, box.getPosition(0, 0).y, box.getPosition(1, 1).y);
-        Vector2<float> dirCircle = (c - closest).Normalize();
-        float overlap = r - closest.Distance(c);
-        disp = (aIsAABB ? dirCircle * -1.0f : dirCircle) * overlap;
-    }
-
-    firstTr.position += disp * firstMove;
-    secondTr.position -= disp * secondMove;
-
-    if (!firstBody.isStatic)
-        killInwardVelocity(firstBody, disp);
-    if (!secondBody.isStatic)
-        killInwardVelocity(secondBody, disp * -1.0f);
+    if (!ba.isStatic)
+        killInwardVelocity(ba, *mtv);
+    if (!bb.isStatic)
+        killInwardVelocity(bb, *mtv * -1.0f);
 }
